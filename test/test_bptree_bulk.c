@@ -16,8 +16,41 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Allocation failure injection. The wrappers are defined before the library
+ * header so that the implementation's malloc/calloc/aligned_alloc calls pass
+ * through them. A value of -1 disables injection. */
+static int fail_after = -1;
+static int allocation_calls = 0;
+
+static void* test_malloc(size_t size) {
+    if (fail_after == 0) return NULL;
+    if (fail_after > 0) fail_after--;
+    allocation_calls++;
+    return malloc(size);
+}
+
+static void* test_calloc(size_t count, size_t size) {
+    if (fail_after == 0) return NULL;
+    if (fail_after > 0) fail_after--;
+    allocation_calls++;
+    return calloc(count, size);
+}
+
+static void* test_aligned_alloc(size_t alignment, size_t size) {
+    if (fail_after == 0) return NULL;
+    if (fail_after > 0) fail_after--;
+    allocation_calls++;
+    return aligned_alloc(alignment, size);
+}
+
+#define malloc test_malloc
+#define calloc test_calloc
+#define aligned_alloc test_aligned_alloc
 #define BPTREE_IMPLEMENTATION
 #include "bptree_bulk.h"
+#undef malloc
+#undef calloc
+#undef aligned_alloc
 
 #define ASSERT(cond, ...)                                         \
     do {                                                          \
@@ -474,6 +507,52 @@ static void test_bulk_large_input(void) {
     free(values);
 }
 
+/* ---------------------------------------------------------------------------
+ * Allocation failure
+ * ------------------------------------------------------------------------- */
+
+static void test_bulk_allocation_failure(void) {
+    const int count = 300;
+    bptree_key_t* keys = malloc((size_t)count * sizeof(bptree_key_t));
+    bptree_value_t* values = malloc((size_t)count * sizeof(bptree_value_t));
+    ASSERT(keys != NULL && values != NULL, "allocation failed");
+    if (!keys || !values) {
+        free(keys);
+        free(values);
+        return;
+    }
+    fill_ascending_keys(keys, count);
+    fill_values(values, count);
+
+    /* Count how many allocations a successful build performs. */
+    allocation_calls = 0;
+    bptree* tree = bptree_bulk_build(keys, values, count, 4, TEST_COMPARE);
+    const int total_allocations = allocation_calls;
+    ASSERT(tree != NULL, "baseline build failed");
+    if (tree) bptree_free(tree);
+    ASSERT(total_allocations > 2, "unexpected allocation count %d", total_allocations);
+
+    /* Fail each allocation in turn; every failure must return NULL cleanly. */
+    for (int fail_at = 0; fail_at < total_allocations; ++fail_at) {
+        fail_after = fail_at;
+        tree = bptree_bulk_build(keys, values, count, 4, TEST_COMPARE);
+        fail_after = -1;
+        ASSERT(tree == NULL, "allocation failure at %d did not return NULL", fail_at);
+        if (tree) bptree_free(tree);
+    }
+
+    /* The same build must still succeed once injection is disabled. */
+    tree = bptree_bulk_build(keys, values, count, 4, TEST_COMPARE);
+    ASSERT(tree != NULL, "build failed after allocation injection was disabled");
+    if (tree) {
+        ASSERT(bptree_check_invariants(tree), "invariants failed after injection test");
+        ASSERT(bptree_count(tree) == count, "count mismatch after injection test");
+        bptree_free(tree);
+    }
+    free(keys);
+    free(values);
+}
+
 int main(void) {
     RUN_TEST(test_bulk_build_sorted);
     RUN_TEST(test_bulk_build_empty);
@@ -483,6 +562,7 @@ int main(void) {
     RUN_TEST(test_bulk_leaf_chain);
     RUN_TEST(test_bulk_does_not_retain_input_arrays);
     RUN_TEST(test_bulk_large_input);
+    RUN_TEST(test_bulk_allocation_failure);
 #ifndef BPTREE_KEY_TYPE_STRING
     RUN_TEST(test_bulk_custom_compare);
 #endif
