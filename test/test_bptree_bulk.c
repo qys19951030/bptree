@@ -166,6 +166,18 @@ static const int test_counts[] = {1, 2, 3, 4, 5, 7, 8, 11, 31, 32, 33, 64, 100, 
 static bptree_key_t bulk_keys[BULK_TEST_CAPACITY];
 static bptree_value_t bulk_values[BULK_TEST_CAPACITY];
 
+/** @brief Computes the smallest possible height for @p count entries. */
+static int minimum_height(const int count, const int max_keys) {
+    if (count == 0) return 1;
+    int leaves = count / max_keys + (count % max_keys != 0 ? 1 : 0);
+    int height = 1;
+    while (leaves > 1) {
+        leaves = leaves / (max_keys + 1) + (leaves % (max_keys + 1) != 0 ? 1 : 0);
+        height++;
+    }
+    return height;
+}
+
 static void test_bulk_build_sorted(void) {
     const int num_orders = (int)(sizeof(test_max_keys_values) / sizeof(test_max_keys_values[0]));
     const int num_counts = (int)(sizeof(test_counts) / sizeof(test_counts[0]));
@@ -183,6 +195,10 @@ static void test_bulk_build_sorted(void) {
                 ASSERT(bptree_max_keys(tree) == test_max_keys_values[o],
                        "max_keys mismatch: %d != %d", bptree_max_keys(tree),
                        test_max_keys_values[o]);
+                ASSERT(bptree_height(tree) == minimum_height(count, test_max_keys_values[o]),
+                       "height %d != minimum %d (max_keys=%d, count=%d)", bptree_height(tree),
+                       minimum_height(count, test_max_keys_values[o]), test_max_keys_values[o],
+                       count);
                 bptree_free(tree);
             }
         }
