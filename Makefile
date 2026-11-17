@@ -56,6 +56,7 @@ CFLAGS = $(CFLAGS_BASE) $(CFLAGS_SAN) $(CFLAGS_TYPE)
 
 # Binary names
 TEST_BINARY    := $(BIN_DIR)/test_bptree
+BULK_TEST_BINARY := $(BIN_DIR)/test_bptree_bulk
 BENCH_BINARY   := $(BIN_DIR)/bench_bptree
 EXAMPLE_BINARY := $(BIN_DIR)/example
 SAFETY_BINARIES := $(BIN_DIR)/test_safety $(BIN_DIR)/test_safety_string $(BIN_DIR)/test_safety_wide
@@ -75,7 +76,7 @@ $(BIN_DIR):
 ## Pattern Rule for Building Binaries
 ##############################################################################################################
 # This rule compiles a C file in the TEST_DIR into a binary in BIN_DIR
-$(BIN_DIR)/%: $(TEST_DIR)/%.c $(INC_DIR)/bptree.h | $(BIN_DIR)
+$(BIN_DIR)/%: $(TEST_DIR)/%.c $(INC_DIR)/bptree.h $(INC_DIR)/bptree_bulk.h | $(BIN_DIR)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 
 $(SAFETY_BINARIES): $(TEST_DIR)/extras/test_safety.c $(INC_DIR)/bptree.h | $(BIN_DIR)
@@ -92,9 +93,10 @@ $(BIN_DIR)/test_safety_wide: SAFETY_FLAGS=-DBPTREE_TEST_WIDE_VALUE
 all: clean test bench example docs ## Build everything, run tests, benchmarks, and generate docs
 
 .PHONY: test
-test: $(TEST_BINARY) $(SAFETY_BINARIES) ## Build and run tests
+test: $(TEST_BINARY) $(BULK_TEST_BINARY) $(SAFETY_BINARIES) ## Build and run tests
 	@echo "Running tests..."
 	./$(TEST_BINARY)
+	./$(BULK_TEST_BINARY)
 	@for binary in $(SAFETY_BINARIES); do ./$$binary; done
 
 .PHONY: bench
