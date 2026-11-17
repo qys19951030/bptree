@@ -82,10 +82,10 @@ static int bptree_bulk_group_size(const int group_index, const int total, const 
  * @param out_leaf_count Receives the number of allocated leaves.
  * @return BPTREE_OK on success, or BPTREE_ALLOCATION_FAILURE.
  */
-static bptree_status bptree_bulk_build_leaves(bptree* tree, const bptree_key_t* keys,
+static bptree_status bptree_bulk_build_leaves(const bptree* tree, const bptree_key_t* keys,
                                               const bptree_value_t* values, const int count,
                                               bptree_node*** out_leaves, int* out_leaf_count) {
-    const int leaf_count = (count + tree->max_keys - 1) / tree->max_keys;
+    const int leaf_count = count / tree->max_keys + (count % tree->max_keys != 0 ? 1 : 0);
     bptree_node** leaves = calloc((size_t)leaf_count, sizeof(bptree_node*));
     if (!leaves) return BPTREE_ALLOCATION_FAILURE;
     int offset = 0;
@@ -207,11 +207,11 @@ BPTREE_API bptree* bptree_bulk_build(const bptree_key_t* keys, const bptree_valu
         }
     }
 
-    bptree_node* old_root = tree->root;
     if (count == 0) {
         return tree;
     }
 
+    bptree_node* old_root = tree->root;
     bptree_node** leaves = NULL;
     int leaf_count = 0;
     if (bptree_bulk_build_leaves(tree, keys, values, count, &leaves, &leaf_count) != BPTREE_OK) {

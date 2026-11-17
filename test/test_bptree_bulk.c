@@ -56,12 +56,10 @@ static int string_key_compare(const bptree_key_t* a, const bptree_key_t* b) {
 }
 
 #define TEST_COMPARE string_key_compare
-#define KEY_EQUALS(a, n) (strcmp((a).data, make_key(n).data) == 0)
 #else
 static bptree_key_t make_key(const int n) { return (bptree_key_t)n; }
 
 #define TEST_COMPARE NULL
-#define KEY_EQUALS(a, n) ((a) == (bptree_key_t)(n))
 #endif
 
 /** @brief Builds an ascending key array of @p count entries with a stride of 2. */
@@ -102,7 +100,7 @@ static void verify_tree_matches_input(const bptree* tree, const bptree_key_t* ke
     for (int i = 0; i < count; ++i) {
         bptree_value_t out;
         ASSERT(bptree_get(tree, &keys[i], &out) == BPTREE_OK, "get failed for index %d", i);
-        ASSERT(value_matches(out, i), "value mismatch at index %d", i);
+        ASSERT(out == values[i], "value mismatch at index %d", i);
     }
 
     bptree_iter it = bptree_iter_begin(tree);
@@ -112,8 +110,7 @@ static void verify_tree_matches_input(const bptree* tree, const bptree_key_t* ke
         if (seen >= count) break;
         const bptree_key_t key = bptree_iter_key(&it);
         ASSERT(compare_keys(&key, &keys[seen]) == 0, "iteration order differs at index %d", seen);
-        ASSERT(value_matches(bptree_iter_value(&it), seen), "iteration value mismatch at %d",
-               seen);
+        ASSERT(bptree_iter_value(&it) == values[seen], "iteration value mismatch at %d", seen);
         ++seen;
         bptree_iter_next(&it);
     }
@@ -144,8 +141,8 @@ static void test_bulk_build_sorted(void) {
             const int count = test_counts[c];
             fill_ascending_keys(bulk_keys, count);
             fill_values(bulk_values, count);
-            bptree* tree = bptree_bulk_build(bulk_keys, bulk_values, count,
-                                             test_max_keys_values[o], TEST_COMPARE);
+            bptree* tree = bptree_bulk_build(bulk_keys, bulk_values, count, test_max_keys_values[o],
+                                             TEST_COMPARE);
             ASSERT(tree != NULL, "build returned NULL (max_keys=%d, count=%d)",
                    test_max_keys_values[o], count);
             if (tree) {
@@ -233,8 +230,8 @@ static void test_bulk_rejects_invalid_max_keys(void) {
  * Structural equivalence with repeated insertion
  * ------------------------------------------------------------------------- */
 
-static bptree* build_by_put(const bptree_key_t* keys, const bptree_value_t* values,
-                            const int count, const int max_keys) {
+static bptree* build_by_put(const bptree_key_t* keys, const bptree_value_t* values, const int count,
+                            const int max_keys) {
     bptree* tree = bptree_create(max_keys, TEST_COMPARE, false);
     if (!tree) return NULL;
     for (int i = 0; i < count; ++i) {
@@ -256,7 +253,7 @@ static bool range_values_match(const bptree* tree, const bptree_key_t* keys,
     }
     bool ok = (n_results == count);
     for (int i = 0; ok && i < count; ++i) {
-        ok = value_matches(results[i], i);
+        ok = (results[i] == values[i]);
     }
     bptree_free_range_results(results);
     return ok;
@@ -345,9 +342,8 @@ static void test_bulk_leaf_chain(void) {
             const int count = test_counts[c];
             fill_ascending_keys(bulk_keys, count);
             fill_values(bulk_values, count);
-            bptree* tree =
-                bptree_bulk_build(bulk_keys, bulk_values, count, test_max_keys_values[o],
-                                  TEST_COMPARE);
+            bptree* tree = bptree_bulk_build(bulk_keys, bulk_values, count, test_max_keys_values[o],
+                                             TEST_COMPARE);
             ASSERT(tree != NULL, "build failed");
             if (tree) {
                 ASSERT(leaf_chain_matches(tree, bulk_keys, count),
@@ -359,6 +355,125 @@ static void test_bulk_leaf_chain(void) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * Custom comparator
+ * ------------------------------------------------------------------------- */
+
+#ifndef BPTREE_KEY_TYPE_STRING
+/** @brief Reverses the numeric order so keys must be supplied in descending order. */
+static int reverse_compare(const bptree_key_t* a, const bptree_key_t* b) {
+    return (*a > *b) ? -1 : ((*a < *b) ? 1 : 0);
+}
+
+static void test_bulk_custom_compare(void) {
+    const int count = 500;
+    bptree_key_t* keys = malloc((size_t)count * sizeof(bptree_key_t));
+    bptree_value_t* values = malloc((size_t)count * sizeof(bptree_value_t));
+    ASSERT(keys != NULL && values != NULL, "allocation failed");
+    if (!keys || !values) {
+        free(keys);
+        free(values);
+        return;
+    }
+    /* Ascending under reverse_compare means numerically descending. */
+    for (int i = 0; i < count; ++i) keys[i] = (bptree_key_t)(count - i);
+    fill_values(values, count);
+
+    bptree* tree = bptree_bulk_build(keys, values, count, 7, reverse_compare);
+    ASSERT(tree != NULL, "custom comparator build returned NULL");
+    if (tree) {
+        ASSERT(bptree_count(tree) == count, "custom comparator count mismatch");
+        ASSERT(bptree_check_invariants(tree), "custom comparator invariants failed");
+        for (int i = 0; i < count; ++i) {
+            bptree_value_t out;
+            ASSERT(bptree_get(tree, &keys[i], &out) == BPTREE_OK,
+                   "custom comparator get failed at %d", i);
+            ASSERT(value_matches(out, i), "custom comparator value mismatch at %d", i);
+        }
+        bptree_iter it = bptree_iter_begin(tree);
+        int seen = 0;
+        while (bptree_iter_valid(&it)) {
+            ASSERT(seen < count, "custom comparator iterator overrun");
+            if (seen >= count) break;
+            ASSERT(bptree_iter_key(&it) == keys[seen], "custom comparator order differs at %d",
+                   seen);
+            ++seen;
+            bptree_iter_next(&it);
+        }
+        ASSERT(seen == count, "custom comparator iterator visited %d of %d", seen, count);
+        bptree_free(tree);
+    }
+    free(keys);
+    free(values);
+}
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Input ownership and large inputs
+ * ------------------------------------------------------------------------- */
+
+static void test_bulk_does_not_retain_input_arrays(void) {
+    const int count = 200;
+    bptree_key_t* keys = malloc((size_t)count * sizeof(bptree_key_t));
+    bptree_value_t* values = malloc((size_t)count * sizeof(bptree_value_t));
+    ASSERT(keys != NULL && values != NULL, "allocation failed");
+    if (!keys || !values) {
+        free(keys);
+        free(values);
+        return;
+    }
+    fill_ascending_keys(keys, count);
+    fill_values(values, count);
+    bptree* tree = bptree_bulk_build(keys, values, count, 4, TEST_COMPARE);
+    ASSERT(tree != NULL, "build returned NULL");
+    /* Release the caller arrays; the tree must remain fully usable. */
+    free(keys);
+    free(values);
+    if (tree) {
+        ASSERT(bptree_count(tree) == count, "count changed after input release");
+        ASSERT(bptree_check_invariants(tree), "invariants failed after input release");
+        for (int i = 0; i < count; i += 17) {
+            const bptree_key_t key = make_key(i * 2);
+            bptree_value_t out;
+            ASSERT(bptree_get(tree, &key, &out) == BPTREE_OK,
+                   "get failed after input release at %d", i);
+            ASSERT(value_matches(out, i), "value changed after input release at %d", i);
+        }
+        bptree_free(tree);
+    }
+}
+
+static void test_bulk_large_input(void) {
+    const int count = 20000;
+    bptree_key_t* keys = malloc((size_t)count * sizeof(bptree_key_t));
+    bptree_value_t* values = malloc((size_t)count * sizeof(bptree_value_t));
+    ASSERT(keys != NULL && values != NULL, "allocation failed");
+    if (!keys || !values) {
+        free(keys);
+        free(values);
+        return;
+    }
+    fill_ascending_keys(keys, count);
+    fill_values(values, count);
+    const int orders[] = {3, 32};
+    for (int o = 0; o < 2; ++o) {
+        bptree* tree = bptree_bulk_build(keys, values, count, orders[o], TEST_COMPARE);
+        ASSERT(tree != NULL, "large build returned NULL (max_keys=%d)", orders[o]);
+        if (tree) {
+            ASSERT(bptree_count(tree) == count, "large count mismatch");
+            ASSERT(bptree_check_invariants(tree), "large invariants failed (max_keys=%d)",
+                   orders[o]);
+            ASSERT(bptree_get_stats(tree).node_count > 0, "large node count is zero");
+            bptree_value_t out;
+            ASSERT(bptree_get(tree, &keys[count / 2], &out) == BPTREE_OK, "large midpoint get");
+            ASSERT(out == values[count / 2], "large midpoint value mismatch");
+            bptree_free(tree);
+        }
+    }
+    free(keys);
+    free(values);
+}
+
 int main(void) {
     RUN_TEST(test_bulk_build_sorted);
     RUN_TEST(test_bulk_build_empty);
@@ -366,6 +481,11 @@ int main(void) {
     RUN_TEST(test_bulk_rejects_invalid_max_keys);
     RUN_TEST(test_bulk_matches_put);
     RUN_TEST(test_bulk_leaf_chain);
+    RUN_TEST(test_bulk_does_not_retain_input_arrays);
+    RUN_TEST(test_bulk_large_input);
+#ifndef BPTREE_KEY_TYPE_STRING
+    RUN_TEST(test_bulk_custom_compare);
+#endif
 
     fprintf(stderr, "----------------------------------------\n");
     fprintf(stderr, "Test Summary: %d tests run, %d failures.\n", tests_run, tests_failed);
